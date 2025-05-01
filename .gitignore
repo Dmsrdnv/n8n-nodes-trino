@@ -7,3 +7,11 @@ npm-debug.log*
 yarn.lock
 .vscode/launch.json
 /.idea
+*.log
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local
+coverage
+*.swp
+*.swo

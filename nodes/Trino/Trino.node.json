@@ -1,0 +1,21 @@
+{
+	"node": "nodes/Trino/Trino.node.ts",
+	"categories": ["Development", "Data & Storage"],
+	"resources": {
+		"primaryDocumentation": [
+			{
+				"url": "https://trino.io/docs/current/index.html"
+			}
+		],
+		"credentialDocumentation": [
+			{
+				"url": "https://trino.io/docs/current/client/jdbc.html"
+			}
+		]
+	},
+	"version": 1,
+	"compatibility": {
+		"n8n": ">=1.90.2",
+		"trino": ">=475"
+	}
+}

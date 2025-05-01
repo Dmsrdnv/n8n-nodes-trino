@@ -1,2 +1,13 @@
 .DS_Store
 *.tsbuildinfo
+.git
+.gitignore
+.vscode
+.idea
+*.log
+coverage
+.env
+.env.local
+.env.*.local
+*.swp
+*.swo

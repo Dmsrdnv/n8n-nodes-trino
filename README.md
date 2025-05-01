@@ -1,18 +1,13 @@
+# n8n-nodes-trino
+
 ![Banner image](docs/banner.png)
 
-# n8n-nodes-clickhouse
+This is an n8n community node that allows you to use [Trino](https://trino.io/) in your n8n workflows.
 
-This is an n8n community node. It lets you use [ClickHouse](https://clickhouse.com/) in your n8n workflows.
+Tested with n8n 1.90.2 and Trino 475. You may need to adjust dependencies according to your setup.
 
-ClickHouse is a fast open-source column-oriented database management system that allows generating analytical data reports in real-time using SQL queries.
-
-[n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/reference/license/) workflow automation platform.
-
-[Installation](#installation)  
-[Operations](#operations)  
-[Credentials](#credentials)
-[Compatibility](#compatibility)  
-[Resources](#resources)  
+- Trino is a distributed SQL query engine designed for fast, interactive analytics with multiple connections to various SQL engines.
+- [n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/reference/license/) workflow automation platform.
 
 ## Installation
 
@@ -20,29 +15,19 @@ Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes
 
 ## Operations
 
-### Query
-
-Query SQL has to be provided. Rows are return as items.
-
-### Insert
-
-Items are insert batch into user-specified table.
+- **Query**: Execute SQL queries against Trino. Node returns rows as items.
 
 ## Credentials
 
-In order to connect to ClickHouse, you have to configure credentials with HTTP URL (only HTTP protocol is supported) and user credentials.
+Configure your Trino connection details in the node's credentials.
 
-## Compatibility
-
-Tested with 0.219.x.
+For more information, please refer to the [Trino JDBC client documentation](https://trino.io/docs/current/client/jdbc.html).
 
 ## Resources
 
-* [n8n community nodes documentation](https://docs.n8n.io/integrations/community-nodes/)
-* [ClickHouse](https://clickhouse.com/)
-* [ClickHouse HTTP interface](https://clickhouse.com/docs/en/interfaces/http/)
+- [n8n community nodes documentation](https://docs.n8n.io/integrations/community-nodes/)
+- [Trino docs](https://trino.io/docs/current/index.html)
 
-## TODOs
+## Attribution
 
-- [ ] [ClickHouse settings](https://clickhouse.com/docs/en/operations/settings/settings/) ([it's possible to set settings for SELECT query](https://clickhouse.com/docs/en/sql-reference/statements/select/#settings-in-select-query))
-- [ ] [query parameters](https://clickhouse.com/docs/en/interfaces/http/#cli-queries-with-parameters)
+This node is based on the original work by the n8n team's [Master node](https://github.com/n8n-io/n8n-nodes-starter/tree/master) and Jakub Kaflik's [Clickhouse node](https://github.com/jkaflik/n8n-nodes-clickhouse).
