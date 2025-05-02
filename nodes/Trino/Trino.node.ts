@@ -7,8 +7,9 @@ import {
   NodeConnectionType,
   NodeOperationError,
   GenericValue,
+  LoggerProxy,            // ← import LoggerProxy for logging
 } from 'n8n-workflow';
-import { BasicAuth, Trino as TrinoClient, QueryResult } from 'trino-client';
+import { BasicAuth, Trino as TrinoClient, QueryResult, RequestHeaders } from 'trino-client';
 
 interface TrinoColumn {
   name: string;
@@ -21,8 +22,8 @@ export class Trino implements INodeType {
     name: 'trino',
     icon: 'file:trino.svg',
     group: ['database', 'input'],
-		parameterPane: 'wide',
-		usableAsTool: true,
+    parameterPane: 'wide',
+    usableAsTool: true,
     version: 1,
     description: 'Execute queries against Trino',
     defaults: { name: 'Trino' },
@@ -37,100 +38,90 @@ export class Trino implements INodeType {
         default: 'SELECT *\nFROM jmx.information_schema.tables\nWHERE 1=1\nORDER BY 1\nLIMIT 5',
         placeholder: "SELECT *\nFROM jmx.information_schema.tables\nWHERE 1=1\nORDER BY 1\nLIMIT 5",
         required: true,
-				typeOptions: {
-					rows: 15,
-				},
+        typeOptions: {
+          rows: 15,
+        },
       },
       {
         displayName: 'Timeout (Seconds)',
         name: 'timeout',
         type: 'number',
         default: 900,
-        description: 'Total time before aborting the query',
+        description: 'Total time before aborting the query and the connection',
         required: true,
       },
     ],
   };
-
   async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
     const creds = (await this.getCredentials('trinoApi')) as IDataObject;
     const query = this.getNodeParameter('query', 0) as string;
-
     const paramTimeout = this.getNodeParameter('timeout', 0) as number;
     const timeoutSec = paramTimeout > 0 ? paramTimeout : (creds.timeout as number ?? 900);
-
     const protocol = creds.ssl ? 'https' : 'http';
     const port = creds.port as number;
-    if (!port)
-      throw new NodeOperationError(
-        this.getNode(),
-        'Port is required in Trino credentials (creds.port)'
-      );
-
+    if (!port) {
+      throw new NodeOperationError(this.getNode(), 'Port is required in Trino credentials (creds.port)');
+    }
     const server = `${protocol}://${creds.host}:${port}`;
-
+  
     let iter: AsyncIterableIterator<QueryResult> | undefined;
-
+  
     try {
+      LoggerProxy.debug(`[Trino] Connecting to ${server} with timeout ${timeoutSec}s`);
+  
       const trinoClient = TrinoClient.create({
-        server: server,
+        server,
         catalog: creds.catalog as string,
         schema: creds.schema as string,
         auth: new BasicAuth(creds.user as string, creds.password as string),
         source: creds.source as string ?? 'n8n',
         ssl: creds.ssl ? { rejectUnauthorized: !creds.ignoreSslIssues } : undefined,
+        extraHeaders: creds.extraHeaders as RequestHeaders,
       });
-
+  
+      LoggerProxy.info(`[Trino] Client initialized for ${server}`);
       iter = await trinoClient.query(query);
-
+      LoggerProxy.info(`[Trino] Executing query: ${query}`);
+  
       const processQuery = async (): Promise<INodeExecutionData[]> => {
         const rows: INodeExecutionData[] = [];
-        if (!iter) {
-          throw new NodeOperationError(this.getNode(), "Iterator not initialized", { itemIndex: 0 });
-        }
-        for await (const queryResult of iter) {
-          if (queryResult.error) {
-            throw new NodeOperationError(
-              this.getNode(),
-              `Trino Error: ${queryResult.error.message} | Query: ${query}`,
-              { description: queryResult.error.message, itemIndex: 0 }
-            );
+        if (!iter) throw new NodeOperationError(this.getNode(), 'Iterator not initialized', { itemIndex: 0 });
+        for await (const result of iter) {
+          if (result.error) {
+            throw new NodeOperationError(this.getNode(), `Trino Error: ${result.error.message}`, { description: result.error.message, itemIndex: 0 });
           }
-
-          if (queryResult.data && queryResult.columns) {
-            const cols = queryResult.columns.map((c: TrinoColumn) => c.name);
-            for (const r of queryResult.data) {
+          if (result.data && result.columns) {
+            const cols = result.columns.map((c: TrinoColumn) => c.name);
+            for (const r of result.data) {
               const obj: IDataObject = {};
-              (r as unknown[]).forEach((val: unknown, i: number) => (obj[cols[i]] = val as GenericValue));
+              (r as unknown[]).forEach((val, i) => (obj[cols[i]] = val as GenericValue));
               rows.push({ json: obj });
             }
           }
         }
         return rows;
       };
-
+  
       const timer = new Promise<never>((_, reject) =>
-        setTimeout(() =>
-          reject(new NodeOperationError(
-            this.getNode(),
-            `Query exceeded overall timeout of ${timeoutSec}s`
-          )),
-          timeoutSec * 1000
-        )
+        setTimeout(
+          () => reject(new NodeOperationError(this.getNode(), `Query exceeded timeout of ${timeoutSec}s`)),
+          timeoutSec * 1000,
+        ),
       );
-
+  
       const rows = await Promise.race([processQuery(), timer]);
-
       return this.prepareOutputData(rows);
+  
     } catch (error: any) {
-      if (error instanceof NodeOperationError) {
-        throw error;
-      }
+      LoggerProxy.error(`[Trino] Error: ${error.message}`);
+      if (error instanceof NodeOperationError) throw error;
       throw new NodeOperationError(this.getNode(), error, { itemIndex: 0 });
     } finally {
       if (iter && iter.return) {
         await iter.return();
+        LoggerProxy.debug(`[Trino] Cleaned up iterator for ${server}`);
       }
     }
   }
+  
 }
