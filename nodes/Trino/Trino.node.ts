@@ -7,7 +7,7 @@ import {
   NodeConnectionType,
   NodeOperationError,
   GenericValue,
-  LoggerProxy,            // ← import LoggerProxy for logging
+  LoggerProxy,
 } from 'n8n-workflow';
 import { BasicAuth, Trino as TrinoClient, QueryResult, RequestHeaders } from 'trino-client';
 
@@ -52,6 +52,7 @@ export class Trino implements INodeType {
       },
     ],
   };
+
   async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
     const creds = (await this.getCredentials('trinoApi')) as IDataObject;
     const query = this.getNodeParameter('query', 0) as string;
@@ -63,32 +64,64 @@ export class Trino implements INodeType {
       throw new NodeOperationError(this.getNode(), 'Port is required in Trino credentials (creds.port)');
     }
     const server = `${protocol}://${creds.host}:${port}`;
-  
+    const catalog = creds.catalog as string;
+    const schema = creds.schema as string;
+    const user = creds.user as string;
+    const source = creds.source as string ?? 'n8n';
+    const rawHttpHeaders = creds.httpHeaders;
+    let httpHeaders: RequestHeaders = {};
+
+    if (typeof rawHttpHeaders === 'string' && rawHttpHeaders.trim()) {
+      try {
+        const parsedHeaders = JSON.parse(rawHttpHeaders);
+        if (typeof parsedHeaders === 'object' && parsedHeaders !== null && !Array.isArray(parsedHeaders)) {
+          httpHeaders = parsedHeaders;
+        } else {
+          LoggerProxy.warn(`n8n-node-trino: 'httpHeaders' parsed from string is not a valid object. Ignoring.`);
+        }
+      } catch (e: any) {
+        LoggerProxy.warn(`n8n-node-trino: Failed to parse 'httpHeaders' string as JSON: ${e.message}. Ignoring.`);
+      }
+    } else if (typeof rawHttpHeaders === 'object' && rawHttpHeaders !== null && !Array.isArray(rawHttpHeaders)) {
+      httpHeaders = rawHttpHeaders as RequestHeaders;
+    } else if (rawHttpHeaders) {
+      LoggerProxy.warn(`n8n-node-trino: 'httpHeaders' has an unexpected type (${typeof rawHttpHeaders}). Ignoring.`);
+    }
+
     let iter: AsyncIterableIterator<QueryResult> | undefined;
-  
+    let timerId: NodeJS.Timeout | undefined;
+
+    const connectionContext = `n8n-node-trino: Context: server=${server}, user=${user}, catalog=${catalog}, schema=${schema}, source=${source}, extraHeaders=${JSON.stringify(httpHeaders)}`;
+
     try {
-      LoggerProxy.debug(`[Trino] Connecting to ${server} with timeout ${timeoutSec}s`);
-  
-      const trinoClient = TrinoClient.create({
-        server,
-        catalog: creds.catalog as string,
-        schema: creds.schema as string,
-        auth: new BasicAuth(creds.user as string, creds.password as string),
-        source: creds.source as string ?? 'n8n',
-        ssl: creds.ssl ? { rejectUnauthorized: !creds.ignoreSslIssues } : undefined,
-        extraHeaders: creds.extraHeaders as RequestHeaders,
-      });
-  
-      LoggerProxy.info(`[Trino] Client initialized for ${server}`);
-      iter = await trinoClient.query(query);
-      LoggerProxy.info(`[Trino] Executing query: ${query}`);
-  
-      const processQuery = async (): Promise<INodeExecutionData[]> => {
+      const operationPromise = (async (): Promise<INodeExecutionData[][]> => {
+        LoggerProxy.debug(`n8n-node-trino: Attempting connection and query to ${server}`);
+
+        const trinoClient = TrinoClient.create({
+          server,
+          catalog,
+          schema,
+          auth: new BasicAuth(user, creds.password as string),
+          source,
+          ssl: creds.ssl ? { rejectUnauthorized: !creds.ignoreSslIssues } : undefined,
+          extraHeaders: httpHeaders,
+        });
+        LoggerProxy.debug(`n8n-node-trino: Client initialized for ${server}`);
+
+        LoggerProxy.debug(`n8n-node-trino: Preparing to execute query with context: server=${server}, user=${user}, catalog=${catalog}, schema=${schema}, source=${source}, extraHeaders=${JSON.stringify(httpHeaders)}`);
+        iter = await trinoClient.query(query);
+        LoggerProxy.info(`n8n-node-trino: Executing query: ${query}`);
+
         const rows: INodeExecutionData[] = [];
         if (!iter) throw new NodeOperationError(this.getNode(), 'Iterator not initialized', { itemIndex: 0 });
+
         for await (const result of iter) {
+          if (!timerId) {
+            LoggerProxy.warn('n8n-node-trino: Timeout occurred during result iteration, stopping processing.');
+            break;
+          }
           if (result.error) {
-            throw new NodeOperationError(this.getNode(), `Trino Error: ${result.error.message}`, { description: result.error.message, itemIndex: 0 });
+            throw new NodeOperationError(this.getNode(), `Trino query Error: ${result.error.message}`, { description: result.error.message, itemIndex: 0 });
           }
           if (result.data && result.columns) {
             const cols = result.columns.map((c: TrinoColumn) => c.name);
@@ -99,29 +132,50 @@ export class Trino implements INodeType {
             }
           }
         }
-        return rows;
-      };
-  
-      const timer = new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new NodeOperationError(this.getNode(), `Query exceeded timeout of ${timeoutSec}s`)),
-          timeoutSec * 1000,
-        ),
-      );
-  
-      const rows = await Promise.race([processQuery(), timer]);
-      return this.prepareOutputData(rows);
-  
-    } catch (error: any) {
-      LoggerProxy.error(`[Trino] Error: ${error.message}`);
-      if (error instanceof NodeOperationError) throw error;
-      throw new NodeOperationError(this.getNode(), error, { itemIndex: 0 });
-    } finally {
-      if (iter && iter.return) {
-        await iter.return();
-        LoggerProxy.debug(`[Trino] Cleaned up iterator for ${server}`);
+        if (timerId) {
+            return this.prepareOutputData(rows);
+        } else {
+            return [];
+        }
+      })();
+
+      const timerPromise = new Promise<never>((_, reject) => {
+        timerId = setTimeout(() => {
+          const timedOutIter = iter;
+          timerId = undefined;
+          LoggerProxy.warn(`n8n-node-trino: Operation exceeded timeout of ${timeoutSec}s on ${server}. Aborting.`);
+          if (timedOutIter && timedOutIter.return) {
+            timedOutIter.return().catch(e => LoggerProxy.error(`n8n-node-trino: Error cancelling iterator on timeout for ${server}: ${e.message}`));
+          }
+          reject(new NodeOperationError(this.getNode(), `Operation exceeded timeout of ${timeoutSec}s`, { itemIndex: 0 }));
+        }, timeoutSec * 1000);
+      });
+
+      const result = await Promise.race([operationPromise, timerPromise]);
+      if (timerId) {
+          clearTimeout(timerId);
       }
+      return result;
+
+    } catch (error: any) {
+      if (timerId) {
+        clearTimeout(timerId);
+      }
+      LoggerProxy.error(`n8n-node-trino: Error during operation for ${server}: ${error.message}`);
+
+      const errorIter = iter;
+      if (errorIter && errorIter.return && !(error instanceof NodeOperationError && error.message.includes('Operation exceeded timeout'))) {
+         await errorIter.return().catch(e => LoggerProxy.error(`n8n-node-trino: Error during final catch cleanup for ${server}: ${e.message}`));
+      }
+
+      const detailedErrorMessage = `${error.message || 'Unknown error'}. ${connectionContext}`;
+      const errorOptions = {
+        itemIndex: (error as any)?.itemIndex ?? 0,
+        description: typeof (error as any)?.description === 'string' ? (error as any).description : undefined,
+        cause: error instanceof Error ? error : undefined
+      };
+
+      throw new NodeOperationError(this.getNode(), detailedErrorMessage, errorOptions);
     }
   }
-  
 }
