@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-trino",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "A n8n node that allows you to query your Trino instance",
   "keywords": [
     "n8n-community-node-package"
