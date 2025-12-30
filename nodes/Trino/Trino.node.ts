@@ -4,7 +4,6 @@ import {
   INodeExecutionData,
   INodeType,
   INodeTypeDescription,
-  NodeConnectionType,
   NodeOperationError,
   GenericValue,
 } from 'n8n-workflow';
@@ -20,14 +19,14 @@ export class Trino implements INodeType {
     displayName: 'Trino',
     name: 'trino',
     icon: 'file:trino.svg',
-    group: ['database', 'input'],
+    group: ['transform'],
     parameterPane: 'wide',
     usableAsTool: true,
     version: 1,
     description: 'Execute queries against Trino',
     defaults: { name: 'Trino' },
-    inputs: [NodeConnectionType.Main],
-    outputs: [NodeConnectionType.Main],
+    inputs: ['main'],
+    outputs: ['main'],
     credentials: [{ name: 'trinoApi', required: true }],
     properties: [
       {
@@ -89,10 +88,25 @@ export class Trino implements INodeType {
 
     let iter: AsyncIterableIterator<QueryResult> | undefined;
     let timerId: NodeJS.Timeout | undefined;
+    let operationCancelled = false;
 
     const connectionContext = `n8n-node-trino: Context: server=${server}, user=${user}, catalog=${catalog}, schema=${schema}, source=${source}, extraHeaders=${JSON.stringify(httpHeaders)}`;
 
     try {
+      // Set up timeout promise first, before starting the operation
+      const timerPromise = new Promise<never>((_, reject) => {
+        timerId = setTimeout(() => {
+          operationCancelled = true;
+          const timedOutIter = iter;
+          timerId = undefined;
+          this.logger.warn(`n8n-node-trino: Operation exceeded timeout of ${timeoutSec}s on ${server}. Aborting.`);
+          if (timedOutIter && timedOutIter.return) {
+            timedOutIter.return().catch(e => this.logger.error(`n8n-node-trino: Error cancelling iterator on timeout for ${server}: ${e.message}`));
+          }
+          reject(new NodeOperationError(this.getNode(), `Operation exceeded timeout of ${timeoutSec}s`, { itemIndex: 0 }));
+        }, timeoutSec * 1000);
+      });
+
       const operationPromise = (async (): Promise<INodeExecutionData[][]> => {
         this.logger.debug(`n8n-node-trino: Attempting connection and query to ${server}`);
 
@@ -115,7 +129,7 @@ export class Trino implements INodeType {
         if (!iter) throw new NodeOperationError(this.getNode(), 'Iterator not initialized', { itemIndex: 0 });
 
         for await (const result of iter) {
-          if (!timerId) {
+          if (operationCancelled) {
             this.logger.warn('n8n-node-trino: Timeout occurred during result iteration, stopping processing.');
             break;
           }
@@ -131,24 +145,12 @@ export class Trino implements INodeType {
             }
           }
         }
-        if (timerId) {
+        if (!operationCancelled) {
             return this.prepareOutputData(rows);
         } else {
             return [];
         }
       })();
-
-      const timerPromise = new Promise<never>((_, reject) => {
-        timerId = setTimeout(() => {
-          const timedOutIter = iter;
-          timerId = undefined;
-          this.logger.warn(`n8n-node-trino: Operation exceeded timeout of ${timeoutSec}s on ${server}. Aborting.`);
-          if (timedOutIter && timedOutIter.return) {
-            timedOutIter.return().catch(e => this.logger.error(`n8n-node-trino: Error cancelling iterator on timeout for ${server}: ${e.message}`));
-          }
-          reject(new NodeOperationError(this.getNode(), `Operation exceeded timeout of ${timeoutSec}s`, { itemIndex: 0 }));
-        }, timeoutSec * 1000);
-      });
 
       const result = await Promise.race([operationPromise, timerPromise]);
       if (timerId) {
