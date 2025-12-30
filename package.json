@@ -43,7 +43,7 @@
     "gulp": "^4.0.2",
     "n8n-workflow": "^1.82.0",
     "prettier": "^2.7.1",
-    "typescript": "~4.8.4"
+    "typescript": "^5.0.0"
   },
   "dependencies": {
     "trino-client": "^0.2.7"

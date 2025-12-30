@@ -4,7 +4,6 @@ import {
   INodeExecutionData,
   INodeType,
   INodeTypeDescription,
-  NodeConnectionType,
   NodeOperationError,
   GenericValue,
 } from 'n8n-workflow';
@@ -20,14 +19,14 @@ export class Trino implements INodeType {
     displayName: 'Trino',
     name: 'trino',
     icon: 'file:trino.svg',
-    group: ['database', 'input'],
+    group: ['transform'],
     parameterPane: 'wide',
     usableAsTool: true,
     version: 1,
     description: 'Execute queries against Trino',
     defaults: { name: 'Trino' },
-    inputs: [NodeConnectionType.Main],
-    outputs: [NodeConnectionType.Main],
+    inputs: ['main'],
+    outputs: ['main'],
     credentials: [{ name: 'trinoApi', required: true }],
     properties: [
       {
