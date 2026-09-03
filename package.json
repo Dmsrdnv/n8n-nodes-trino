@@ -46,6 +46,6 @@
     "typescript": "~4.8.4"
   },
   "dependencies": {
-    "trino-client": "^0.2.7"
+    "@trinodb/trino-js-client": "^0.3.2"
   }
 }

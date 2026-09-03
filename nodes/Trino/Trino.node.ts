@@ -8,7 +8,7 @@ import {
   NodeOperationError,
   GenericValue,
 } from 'n8n-workflow';
-import { BasicAuth, Trino as TrinoClient, QueryResult, RequestHeaders } from 'trino-client';
+import { BasicAuth, Trino as TrinoClient, QueryResult, RequestHeaders } from '@trinodb/trino-js-client';
 
 interface TrinoColumn {
   name: string;
